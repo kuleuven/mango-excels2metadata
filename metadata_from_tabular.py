@@ -5,6 +5,8 @@ from irods.session import iRODSSession
 from irods.meta import iRODSMeta, AVUOperation
 from irods.exception import DataObjectDoesNotExist, CollectionDoesNotExist
 from irods.data_object import iRODSDataObject
+from irods.column import Criterion
+from irods.models import Collection, DataObject
 from collections.abc import Generator
 
 
@@ -65,6 +67,56 @@ def parse_tabular_file(path: str, session=None, separator: str = ","):
 
 # endregion
 # region Preprocessing
+
+
+def search_objects_with_identifier(session, workingdirectory, identifier, exact_match):
+    """Searches a given project for objects starting with a certain identifier
+
+
+    Arguments
+    ---------
+    session: obj
+        An iRODSSession object
+
+    workingdirectory: str
+        Path to the collection in iRODS
+
+    identifier: str
+        The identifier you want to search for
+
+    Returns
+    -------
+    paths: str
+        A list of data object paths matching the identifier
+    """
+
+    operator = "=" if exact_match else "like"
+    query = (
+        session.query(DataObject.name, Collection.name)
+        .filter(Criterion("like", Collection.name, workingdirectory + "%"))
+        .filter(Criterion(operator, DataObject.name, identifier + "%"))
+    )
+    paths = [
+        f"{result[Collection.name]}/{result[DataObject.name]}" for result in query
+    ].join(",")
+    return paths
+
+
+def query_dataobjects_with_filename(
+    session, df, filename_column, workingdirectory, exact_match=True
+):
+    """
+    Returns df with column 'dataobject_paths' instead of the filename column
+    """
+
+    paths = []
+    for row in df.iterrows:
+        path = search_objects_with_identifier(
+            session, workingdirectory, row[filename_column], exact_match
+        )
+        paths.append(path)
+    df.loc[:, "dataobject_paths"] = paths
+    df.drop(filename_column, axis=1)
 
 
 # Will this survive as it is??
