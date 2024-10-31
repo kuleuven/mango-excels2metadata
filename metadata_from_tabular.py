@@ -96,9 +96,7 @@ def search_objects_with_identifier(session, workingdirectory, identifier, exact_
         .filter(Criterion("like", Collection.name, workingdirectory + "%"))
         .filter(Criterion(operator, DataObject.name, identifier + "%"))
     )
-    paths = [
-        f"{result[Collection.name]}/{result[DataObject.name]}" for result in query
-    ].join(",")
+    paths = [f"{result[Collection.name]}/{result[DataObject.name]}" for result in query]
     return paths
 
 
@@ -106,17 +104,22 @@ def query_dataobjects_with_filename(
     session, df, filename_column, workingdirectory, exact_match=True
 ):
     """
-    Returns df with column 'dataobject_paths' instead of the filename column
+    Queries data objects in iRODS based on identifiers in the dataframe,
+    and creates a row for each result with the accompanying metadata.
     """
 
-    paths = []
-    for row in df.iterrows:
-        path = search_objects_with_identifier(
-            session, workingdirectory, row[filename_column], exact_match
+    new_rows = []
+    for index, identifier in enumerate(df[filename_column]):
+        paths = search_objects_with_identifier(
+            session, workingdirectory, identifier, exact_match
         )
-        paths.append(path)
-    df.loc[:, "dataobject_paths"] = paths
-    df.drop(filename_column, axis=1)
+        for path in paths:
+            new_row = df.iloc[index]
+            new_row["dataobject"] = path
+            # create a 1 row dataframe, which needs to be transposed (hence the T)
+            new_rows.append(new_row.to_frame().T)
+    new_df = pd.concat(new_rows, ignore_index=True)
+    return new_df
 
 
 # Will this survive as it is??
