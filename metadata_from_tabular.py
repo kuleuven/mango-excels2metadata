@@ -115,6 +115,84 @@ def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSessi
 
 # endregion
 
+# region prompts
+from rich.prompt import Prompt, Confirm
+from rich.console import Console, Group
+from rich.markdown import Markdown
+
+console = Console()
+
+
+def select_sheets(sheet_collection: dict) -> list:
+    selection_of_sheets = list(sheet_collection.keys())
+    if len(sheet_collection) == 1:
+        if selection_of_sheets[0] == "single_sheet":
+            console.print(
+                "You have provided a plain text file, no multiple sheets, great work!"
+            )
+        else:
+            console.print(
+                Markdown(
+                    f"The file you provided has only one sheet: `{selection_of_sheets[0]}`."
+                )
+            )
+    else:
+        selected_sheet = Prompt.ask(
+            "Which of the available sheets would you like to select?",
+            default="all",
+            choices=["all"] + selection_of_sheets,
+        )
+        selection_of_sheets = (
+            selection_of_sheets if selected_sheet == "all" else [selected_sheet]
+        )
+    return selection_of_sheets
+
+
+def identify_dataobject_column(sheet_collection: dict) -> str:
+    columns = set([col for sheet in sheet_collection.values() for col in sheet.columns])
+    dfs = "dataframe" if len(sheet_collection) == 1 else "dataframes"
+    column_intro = f"Your {dfs} have {len(columns)} columns:\n\n"
+    column_list = "\n\n".join(f"- {col}" for col in columns)
+    console.print(Markdown(column_intro + column_list))
+    return Prompt.ask(
+        "Which column contains an unique identifier for the target data object?",
+        choices=columns,
+    )
+
+
+def classify_dataobject_column(dataobject_column: str) -> dict:
+    import re
+
+    path_type = Prompt.ask(
+        Markdown(
+            f"Is the path coded in `{dataobject_column}` a relative path or part of a filename?"
+        ),
+        choices=["relative", "part"],
+    )
+    workdir = ""
+    while not re.match("/[a-z_]+/home/[^/]+/", workdir):
+        workdir = Prompt.ask(
+            Markdown(
+                "What is the absolute path of the collection where we can find these data objects? (It should start with `/{zone}/home/{project}/...`)"
+            )
+        )
+    if path_type == "relative":
+        console.print(
+            Markdown(
+                f"Great! The relative paths in `{dataobject_column}` will be chained to `{workdir}`!"
+            )
+        )
+    else:
+        console.print(
+            Markdown(
+                f"Great! Data objects will be found by querying the contents of `{dataobject_column}` within `{workdir}`!"
+            )
+        )
+    return {"path_type": path_type, "workdir": workdir}
+
+
+# endregion
+
 # region Chains
 
 
