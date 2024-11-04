@@ -5,6 +5,8 @@ from irods.session import iRODSSession
 from irods.meta import iRODSMeta, AVUOperation
 from irods.exception import DataObjectDoesNotExist, CollectionDoesNotExist
 from irods.data_object import iRODSDataObject
+from irods.column import Criterion
+from irods.models import Collection, DataObject
 from collections.abc import Generator
 
 
@@ -65,6 +67,64 @@ def parse_tabular_file(path: str, session=None, separator: str = ","):
 
 # endregion
 # region Preprocessing
+
+
+def search_objects_with_identifier(session, workingdirectory, identifier, exact_match):
+    """Searches a given project for objects starting with a certain identifier
+
+
+    Arguments
+    ---------
+    session: obj
+        An iRODSSession object
+
+    workingdirectory: str
+        Path to the collection in iRODS
+
+    identifier: str
+        The identifier you want to search for
+
+    Returns
+    -------
+    paths: str
+        A list of data object paths matching the identifier
+    """
+
+    operator = "=" if exact_match else "like"
+    query = (
+        session.query(DataObject.name, Collection.name)
+        .filter(Criterion("like", Collection.name, workingdirectory + "%"))
+        .filter(Criterion(operator, DataObject.name, identifier + "%"))
+    )
+    paths = [f"{result[Collection.name]}/{result[DataObject.name]}" for result in query]
+    return paths
+
+
+def query_dataobjects_with_filename(
+    session, df, filename_column, workingdirectory, exact_match=True
+):
+    """
+    Queries data objects in iRODS based on identifiers in the dataframe,
+    and creates a row for each result with the accompanying metadata.
+    """
+
+    new_rows = []
+    for index, identifier in enumerate(df[filename_column]):
+        paths = search_objects_with_identifier(
+            session, workingdirectory, identifier, exact_match
+        )
+        for path in paths:
+            new_row = df.iloc[index]
+            new_row["dataobject"] = path
+            # create a 1 row dataframe, which needs to be transposed (hence the T)
+            new_rows.append(new_row.to_frame().T)
+    if len(new_rows) > 0:
+        new_df = pd.concat(new_rows, ignore_index=True)
+    else:
+        columns = [column for column in df.columns]
+        columns.append("dataobject")
+        new_df = pd.DataFrame(columns=columns)
+    return new_df
 
 
 # Will this survive as it is??
