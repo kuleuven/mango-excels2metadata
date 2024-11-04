@@ -118,7 +118,12 @@ def query_dataobjects_with_filename(
             new_row["dataobject"] = path
             # create a 1 row dataframe, which needs to be transposed (hence the T)
             new_rows.append(new_row.to_frame().T)
-    new_df = pd.concat(new_rows, ignore_index=True)
+    if len(new_rows) > 0:
+        new_df = pd.concat(new_rows, ignore_index=True)
+    else:
+        columns = [column for column in df.columns]
+        columns.append("dataobject")
+        new_df = pd.DataFrame(columns=columns)
     return new_df
 
 
