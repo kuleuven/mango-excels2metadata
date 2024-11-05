@@ -10,9 +10,10 @@ from irods.models import Collection, DataObject
 from collections.abc import Generator
 import click
 from rich.prompt import Prompt, Confirm
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
-from rich.pretty import pprint
+from rich.syntax import Syntax
+from rich.progress import track
 
 
 # region OpenExcel
@@ -370,13 +371,84 @@ def setup(example, output, sep=",", irods=True):
     # create yaml from the dictionary
     yml = yaml.dump(for_yaml, default_flow_style=False, indent=2)
     # Make a group and indicate where it is saved
-    console.print(Markdown("# This is your config yaml"))
-    console.print(yml)
+    panel_group = Group(
+        Markdown("# This is your config yaml"),
+        Syntax(yml, "yaml"),
+        Markdown(f"_It will be saved in `{output.name}`._"),
+    )
+    console.print(panel_group)
     click.echo(yml, file=output)
 
 
-def do_something():
-    return
+@mdtab.command()
+@click.option("--config", type=click.File("r"))
+@click.option("--dry-run", is_flag=True)
+@click.argument("filename")
+def run(filename, config, dry_run):
+    process_file = apply_config(config)
+    try:
+        env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
+    except KeyError:
+        env_file = os.path.expanduser("~/.irods/irods_environment.json")
+
+    ssl_settings = {}
+    with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
+        sheets = process_file(filename, session)
+        for sheetname, sheet in sheets.items():
+            progress_message = f"Adding metadata from {sheetname + ' in ' if len(sheets) > 1 else ''}`{filename}`..."
+            n = 0
+            for dataobject, md_dict in track(
+                generate_rows(sheet),
+                description=progress_message,
+            ):
+                if not dry_run:
+                    apply_metadata_to_data_object(dataobject, md_dict, session)
+                n += 1
+            console.print(
+                f"{'Created' if dry_run else 'Applied'} {len(md_dict)} AVUs for each of {n} data objects."
+            )
+
+
+def apply_config(config: click.File):
+    import yaml
+
+    yml = yaml.safe_load(config)
+
+    def process_tabular_file(filename, session):
+        sheets = parse_tabular_file(filename, session, yml.get("separator", None))
+        sheets_to_return = {}
+        for sheetname, sheet in sheets.items():
+            if not sheetname in yml["sheets"]:
+                continue
+            path_column_name = yml["path_column"]["column_name"]
+            if yml["path_column"]["path_type"] == "absolute":
+                sheet = sheet.rename(columns={path_column_name: "dataobject"})
+            else:
+                exact_match = yml["path_column"]["path_type"] == "relative"
+                # or should we chain in case of 'relative' without querying?
+                sheet = query_dataobjects_with_filename(
+                    session,
+                    sheet,
+                    path_column_name,
+                    yml["path_column"]["workdir"],
+                    exact_match=exact_match,
+                )
+                if sheet.empty:
+                    continue
+            if "whitelist" in yml:
+                sheet = sheet[
+                    [
+                        c
+                        for c in sheet.columns
+                        if c in [path_column_name] + yml["whitelist"]
+                    ]
+                ]
+            elif "blacklist" in yml:
+                sheet = sheet[[c for c in sheet.columns if c not in yml["blacklist"]]]
+            sheets_to_return[sheetname] = sheet
+        return sheets_to_return
+
+    return process_tabular_file
 
 
 # endregion
