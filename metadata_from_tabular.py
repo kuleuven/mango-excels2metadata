@@ -8,6 +8,11 @@ from irods.data_object import iRODSDataObject
 from irods.column import Criterion
 from irods.models import Collection, DataObject
 from collections.abc import Generator
+import click
+from rich.prompt import Prompt, Confirm
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.pretty import pprint
 
 
 # region OpenExcel
@@ -162,7 +167,7 @@ def dict_to_avus(row: dict) -> Generator[iRODSMeta]:
 def generate_rows(dataframe: pd.DataFrame) -> Generator[tuple]:
     """Yield a tuple of filename and metadata-dictionary from a dataframe"""
     for _, row in dataframe.iterrows():
-        yield (row["filename"], {k: v for k, v in row.items() if k != "filename"})
+        yield (row["dataobject"], {k: v for k, v in row.items() if k != "dataobject"})
 
 
 def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSession):
@@ -176,11 +181,15 @@ def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSessi
 # endregion
 
 # region prompts
-from rich.prompt import Prompt, Confirm
-from rich.console import Console, Group
-from rich.markdown import Markdown
 
 console = Console()
+
+
+def explain_multiple_choice():
+    console.print(
+        "Type one answer at a time, pressing Enter afterwards. Press Enter twice when you are done.",
+        style="italic magenta",
+    )
 
 
 def select_sheets(sheet_collection: dict) -> list:
@@ -196,22 +205,29 @@ def select_sheets(sheet_collection: dict) -> list:
                     f"The file you provided has only one sheet: `{selection_of_sheets[0]}`."
                 )
             )
-    else:
+        return selection_of_sheets[0]
+    all_sheets = Confirm.ask("Would you like to use all of the available sheets?")
+    if all_sheets:
+        return selection_of_sheets
+    explain_multiple_choice()
+    selected_sheets = []
+    while True:
         selected_sheet = Prompt.ask(
             "Which of the available sheets would you like to select?",
-            default="all",
-            choices=["all"] + selection_of_sheets,
+            choices=selection_of_sheets + [""],
         )
-        selection_of_sheets = (
-            selection_of_sheets if selected_sheet == "all" else [selected_sheet]
-        )
-    return selection_of_sheets
+        if selected_sheet:
+            selected_sheets.append(selected_sheet)
+        else:
+            break
+    return selected_sheets
 
 
 def identify_dataobject_column(sheet_collection: dict) -> str:
     columns = set([col for sheet in sheet_collection.values() for col in sheet.columns])
-    dfs = "dataframe" if len(sheet_collection) == 1 else "dataframes"
-    column_intro = f"Your {dfs} have {len(columns)} columns:\n\n"
+    dfs = "dataframe has" if len(sheet_collection) == 1 else "dataframes have"
+    cols = "1 column" if len(columns) == 1 else f"{len(columns)} columns"
+    column_intro = f"Your {dfs} {cols}:\n\n"
     column_list = "\n\n".join(f"- {col}" for col in columns)
     console.print(Markdown(column_intro + column_list))
     return Prompt.ask(
@@ -224,17 +240,13 @@ def classify_dataobject_column(dataobject_column: str) -> dict:
     import re
 
     path_type = Prompt.ask(
-        Markdown(
-            f"Is the path coded in `{dataobject_column}` a relative path or part of a filename?"
-        ),
+        f"Is the path coded in `{dataobject_column}` a relative path or part of a filename?",
         choices=["relative", "part"],
     )
     workdir = ""
     while not re.match("/[a-z_]+/home/[^/]+/", workdir):
         workdir = Prompt.ask(
-            Markdown(
-                "What is the absolute path of the collection where we can find these data objects? (It should start with `/{zone}/home/{project}/...`)"
-            )
+            "What is the absolute path of the collection where we can find these data objects? (It should start with `/{zone}/home/{project}/...`)"
         )
     if path_type == "relative":
         console.print(
@@ -251,6 +263,29 @@ def classify_dataobject_column(dataobject_column: str) -> dict:
     return {"path_type": path_type, "workdir": workdir}
 
 
+def filter_columns(columns: list) -> dict:
+    filter_how = Prompt.ask(
+        "Would you like to whitelist or blacklist some columns?",
+        choices=["whitelist", "blacklist", "neither"],
+        default="neither",
+    )
+    if filter_how == "neither":
+        return {}
+    explain_multiple_choice()
+    filter_what = []
+    while True:
+        ans = Prompt.ask(
+            f"Which column(s) would you like to {filter_how}?", choices=columns + [""]
+        )
+        if ans:
+            filter_what.append(ans)
+        else:
+            break
+    if len(filter_what) == 0:
+        return {}
+    return {filter_how: filter_what}
+
+
 # endregion
 
 # region Chains
@@ -258,6 +293,88 @@ def classify_dataobject_column(dataobject_column: str) -> dict:
 
 # These are the functions that would be called from the command line :)
 # (and use click)
+@click.group()
+def mdtab():
+    pass
+
+
+@mdtab.command()
+@click.option("--sep", default=",")
+@click.option("--irods/--no-irods", default=False)
+@click.argument("example")
+@click.argument("output", type=click.File("w"))
+def setup(example, output, sep=",", irods=True):
+    """Parse the contents of the example file and generate a config yaml file for preprocessing."""
+    import re
+    import yaml
+
+    # only connect to irods if requested
+    if irods:
+        try:
+            env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
+        except KeyError:
+            env_file = os.path.expanduser("~/.irods/irods_environment.json")
+
+        ssl_settings = {}
+        with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
+            sheets = parse_tabular_file(example, session, sep)
+    else:
+        sheets = parse_tabular_file(example, separator=sep)
+
+    # select which sheets to use, if there are more than one
+    selection_of_sheets = select_sheets(sheets)
+    sheets = {k: v for k, v in sheets.items() if k in selection_of_sheets}
+
+    # identify the column with data objects identifiers
+    dataobject_column = identify_dataobject_column(sheets)
+    # only keep sheets that contain that column
+    sheets = {k: v for k, v in sheets.items() if dataobject_column in v.columns}
+
+    # start config yaml with the info we have
+    for_yaml = {
+        "sheets": list(sheets.keys()),
+        "separator": sep,
+        "path_column": {
+            "column_name": dataobject_column,
+        },
+    }
+
+    # check the first data object name to see if it is absolute
+    first_dataobject = list(sheets.values())[0][dataobject_column][0]
+    if re.match("/[a-z_]+/home/[^/]+/", first_dataobject):
+        dataobject_column_type = {"path_type": "absolute"}
+    else:
+        # if the path is not absolute, ask:
+        # - whether it is relative or part of a filename
+        # - in which working directory (at least project level) it should be searched
+        dataobject_column_type = classify_dataobject_column(dataobject_column)
+    # add path and working directory info to the yaml
+    for_yaml["path_column"].update(dataobject_column_type)
+
+    # ask if any columns need to be blacklisted OR whitelisted
+    column_filter = filter_columns(
+        list(
+            set(
+                [
+                    col
+                    for sheet in sheets.values()
+                    for col in sheet.columns
+                    if col != dataobject_column
+                ]
+            )
+        )
+    )
+    # update yaml with column information
+    for_yaml.update(column_filter)
+
+    # create yaml from the dictionary
+    yml = yaml.dump(for_yaml, default_flow_style=False, indent=2)
+    # Make a group and indicate where it is saved
+    console.print(Markdown("# This is your config yaml"))
+    console.print(yml)
+    click.echo(yml, file=output)
+
+
 def do_something():
     return
 
@@ -265,11 +382,4 @@ def do_something():
 # endregion
 
 if __name__ == "__main__":
-    try:
-        env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
-    except KeyError:
-        env_file = os.path.expanduser("~/.irods/irods_environment.json")
-
-    ssl_settings = {}
-    with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
-        do_something()
+    mdtab()
