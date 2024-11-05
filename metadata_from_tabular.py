@@ -133,9 +133,9 @@ def query_dataobjects_with_filename(
     return new_df
 
 
-def chain_collection_and_filename(session, df, filename_column, workingdirectory):
+def chain_collection_and_filename(df, filename_column, workingdirectory):
     """Renames the column with the relative data object path and completes it with the collection path"""
-    df.rename(columns={"dataobject": filename_column})
+    df = df.rename(columns={filename_column: "dataobject"})
     df["dataobject"] = [str(workingdirectory / Path(x)) for x in df["dataobject"]]
     return df
 
@@ -369,7 +369,7 @@ def setup(example, output, sep=",", irods=True):
 @click.option("--config", type=click.File("r"))
 @click.option("--dry-run", is_flag=True)
 @click.argument("filename")
-def run(filename, config, dry_run):
+def run(filename, config, dry_run=False):
     process_file = apply_config(config)
     try:
         env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
@@ -390,7 +390,10 @@ def run(filename, config, dry_run):
                     apply_metadata_to_data_object(dataobject, md_dict, session)
                 n += 1
             console.print(
-                f"{'Created' if dry_run else 'Applied'} {len(md_dict)} AVUs for each of {n} data objects."
+                Markdown(
+                    f"{'Created' if dry_run else 'Applied'} {len(md_dict)} AVUs for each of {n} data objects, with the following keys:\n\n"
+                    + "\n\n".join(f"- **{k}**" for k in md_dict.keys())
+                )
             )
 
 
@@ -418,18 +421,14 @@ def apply_config(config: click.File):
                     continue
             elif yml["path_column"]["path_type"] == "relative":
                 sheet = chain_collection_and_filename(
-                    session, sheet, path_column_name, yml["path_column"]["workdir"]
+                    sheet, path_column_name, yml["path_column"]["workdir"]
                 )
             else:
                 sheet = sheet.rename(columns={path_column_name: "dataobject"})
 
             if "whitelist" in yml:
                 sheet = sheet[
-                    [
-                        c
-                        for c in sheet.columns
-                        if c in [path_column_name] + yml["whitelist"]
-                    ]
+                    [c for c in sheet.columns if c in ["dataobject"] + yml["whitelist"]]
                 ]
             elif "blacklist" in yml:
                 sheet = sheet[[c for c in sheet.columns if c not in yml["blacklist"]]]
