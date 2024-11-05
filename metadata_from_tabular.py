@@ -133,26 +133,11 @@ def query_dataobjects_with_filename(
     return new_df
 
 
-# Will this survive as it is??
-def extract_filename(tabulardata, path_prefix=""):
-    """Extract filename from the tabular data.
-    This is the default method to extract the full path of the data object
-    to which metadata will be added from tabular data.
-
-    Args:
-        tabulardata (pandas.Series): Row of the dataframe with metadata to add.
-        path_prefix (str, optional): Initial part of the absolute path of the data object, which should be added in
-        case of a relative path in the tabulardata. Defaults to "".
-
-    Yields:
-        str: Absolute path(s) to the data objects
-    """
-    final_path = Path(path_prefix) / Path(tabulardata["dataobject"])
-    if final_path.is_absolute() and final_path.parts[2] != "home":
-        raise IOError(
-            "Invalid filename: if the path is absolute, the second collection should be 'home'."
-        )
-    yield str(final_path)
+def chain_collection_and_filename(session, df, filename_column, workingdirectory):
+    """Renames the column with the relative data object path and completes it with the collection path"""
+    df.rename(columns={"dataobject": filename_column})
+    df["dataobject"] = [str(workingdirectory / Path(x)) for x in df["dataobject"]]
+    return df
 
 
 # endregion
@@ -421,20 +406,23 @@ def apply_config(config: click.File):
             if not sheetname in yml["sheets"]:
                 continue
             path_column_name = yml["path_column"]["column_name"]
-            if yml["path_column"]["path_type"] == "absolute":
-                sheet = sheet.rename(columns={path_column_name: "dataobject"})
-            else:
-                exact_match = yml["path_column"]["path_type"] == "relative"
-                # or should we chain in case of 'relative' without querying?
+            if yml["path_column"]["path_type"] == "part":
                 sheet = query_dataobjects_with_filename(
                     session,
                     sheet,
                     path_column_name,
                     yml["path_column"]["workdir"],
-                    exact_match=exact_match,
+                    exact_match=False,
                 )
                 if sheet.empty:
                     continue
+            elif yml["path_column"]["path_type"] == "relative":
+                sheet = chain_collection_and_filename(
+                    session, sheet, path_column_name, yml["path_column"]["workdir"]
+                )
+            else:
+                sheet = sheet.rename(columns={path_column_name: "dataobject"})
+
             if "whitelist" in yml:
                 sheet = sheet[
                     [
