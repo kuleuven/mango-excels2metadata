@@ -289,7 +289,7 @@ def mdtab():
 @click.option("--irods/--no-irods", default=False)
 @click.argument("example")
 @click.argument("output", type=click.File("w"))
-def setup(example, output, sep=",", irods=True):
+def setup(example, output, sep=",", irods=False):
     """Parse the contents of the example file and generate a config yaml file for preprocessing."""
     import re
     import yaml
@@ -370,7 +370,7 @@ def setup(example, output, sep=",", irods=True):
 @click.option("--dry-run", is_flag=True)
 @click.argument("filename")
 def run(filename, config, dry_run=False):
-    process_file = apply_config(config)
+    process_file = apply_config(config)  # parse the configuration file
     try:
         env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
     except KeyError:
@@ -378,10 +378,11 @@ def run(filename, config, dry_run=False):
 
     ssl_settings = {}
     with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
-        sheets = process_file(filename, session)
+        sheets = process_file(filename, session)  # preprocess the tabular file
         for sheetname, sheet in sheets.items():
             progress_message = f"Adding metadata from {sheetname + ' in ' if len(sheets) > 1 else ''}`{filename}`..."
             n = 0
+            # loop over each row printing a progress bar
             for dataobject, md_dict in track(
                 generate_rows(sheet),
                 description=progress_message,
