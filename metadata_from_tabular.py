@@ -39,7 +39,10 @@ def create_file_object(path: str, session=None):
     if ppath.exists():
         return ppath
     if session:
-        return session.data_objects.get(path)
+        try:
+            return session.data_objects.get(path)
+        except DataObjectDoesNotExist or CollectionDoesNotExist as e:
+            raise e
     raise FileNotFoundError
 
 
@@ -167,10 +170,17 @@ def generate_rows(dataframe: pd.DataFrame) -> Generator[tuple]:
 
 def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSession):
     """Add metadata from a dictionary to a given data object"""
-    obj = session.data_objects.get(path)
-    obj.metadata.apply_atomic_operations(
-        *[AVUOperation(operation="add", avu=item) for item in dict_to_avus(avu_dict)]
-    )
+    try:
+        obj = session.data_objects.get(path)
+        obj.metadata.apply_atomic_operations(
+            *[
+                AVUOperation(operation="add", avu=item)
+                for item in dict_to_avus(avu_dict)
+            ]
+        )
+        return True
+    except Exception:
+        return False
 
 
 # endregion
@@ -432,20 +442,31 @@ def run(filename, config, dry_run=False):
         for sheetname, sheet in sheets.items():
             progress_message = f"Adding metadata from {sheetname + ' in ' if len(sheets) > 1 else ''}`{filename}`..."
             n = 0
+            errors = 0
             # loop over each row printing a progress bar
             for dataobject, md_dict in track(
                 generate_rows(sheet),
                 description=progress_message,
             ):
+                res = True
                 if not dry_run:
-                    apply_metadata_to_data_object(dataobject, md_dict, session)
-                n += 1
+                    res = apply_metadata_to_data_object(dataobject, md_dict, session)
+                if res:
+                    n += 1
+                else:
+                    errors += 1
+
             console.print(
                 Markdown(
                     f"{'Created' if dry_run else 'Applied'} {len(md_dict)} AVUs for each of {n} data objects, with the following keys:\n\n"
                     + "\n\n".join(f"- **{k}**" for k in md_dict.keys())
                 )
             )
+            if errors > 0:
+                console.print(
+                    f"{errors} data objects were skipped because the paths were not valid!",
+                    style="red bold",
+                )
 
 
 def apply_config(config: click.File) -> callable:
@@ -486,6 +507,7 @@ def apply_config(config: click.File) -> callable:
             elif "blacklist" in yml:
                 sheet = sheet[[c for c in sheet.columns if c not in yml["blacklist"]]]
             sheets_to_return[sheetname] = sheet
+
         return sheets_to_return
 
     return process_tabular_file
