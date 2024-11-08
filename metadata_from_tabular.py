@@ -66,11 +66,16 @@ def parse_tabular_file(path: str, session=None, separator: str = ","):
         # and there you should use just 'r' instead
         reading_mode = "r" if type(file) == iRODSDataObject else "rb"
         with file.open(reading_mode) as f:
-            return pd.read_excel(f, sheet_name=None)
+            sheets = pd.read_excel(f, sheet_name=None)
+        if any(x.strip() != x for x in sheets.keys()):
+            sheets = {k.strip(): v for k, v in sheets.items()}
     else:
         # these types are not binary and should be opened with 'r'
         with file.open("r") as f:
-            return {"single_sheet": pd.read_csv(f, sep=separator)}
+            sheets = {"single_sheet": pd.read_csv(f, sep=separator)}
+    for sheet in sheets.values():
+        sheet.columns = sheet.columns.str.strip()
+    return sheets
 
 
 # endregion
