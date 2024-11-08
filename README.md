@@ -24,6 +24,47 @@ This configuration file can then be provided as the `--config` option to the `ru
 command in order to standardize tabular files and properly obtain paths to data objects
 and attach metadata to them based on the columns of these files.
 
+### Examples
+
+### A small csv file
+
+The following file simulates having [a small semicolon-separated file](./testdata/testdata.csv)
+with absolute paths in a "dataobject" column and a few columns with metadata.
+
+First, with the `setup` command, we answer a few questions on how to parse the tabular file
+and create a "test-config.yaml" configuration file that keeps track of the answers.
+
+Then, with the `run` command, we use the information on the configuration YAML file to parse
+the tabular file and, because it's just a "dry run", we simulate adding the metadata to each
+data object. Note that this `run` command could then also be used on other tabular files
+with the same properties as the original one.
+
+```sh
+python metadata_from_tabular.py setup testdata/testdata.csv test-config.yaml --sep ";"
+python metadata_from_tabular.py run testdata/testdata.csv --config test-config.yaml --dry-run
+```
+
+### A larger Excel file with multiple sheets
+
+In this second example the file is an [Excel file with multiple sheets](./testdata/bigger-testdata.xlsx),
+including one that has no relevant metadata. Again, with the `setup` command we indicate
+how the Excel should be parsed and record the answers in a YAML configuration file.
+Then, with the `run` command we parse the Excel and simulate adding the metadata.
+
+```sh
+python metadata_from_tabular.py setup testdata/bigger-testdata.xlsx bigger-test-config.yaml
+python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigger--config.yaml --dry-run
+```
+
+## Actual test data
+
+**TO BE DELETED BEFORE DEPLOYMENT**
+
+```sh
+python metadata_from_tabular.py setup testdata/metadata.tsv testdata/voetlab-training.yaml --sep "\t"
+python metadata_from_tabular.py run testdata/metadata.tsv --config voetlab-training.yaml
+```
+
 ## `setup`
 
 The configuration file can be created as follows:
@@ -41,7 +82,8 @@ python metadata_from_tabular.py setup /zone/home/project/path/to/tabular output_
 ```
 
 If the tabular file is a plain text file, it is possible to specify a column separator
-with the `--sep` option, which has "," as a default:
+with the `--sep` option, which has "," as a default. If a wrong separator is provided and
+the parser finds a single column, it will warn you and give you the possibility to correct it.
 
 ```sh
 python metadata_from_tabular.py setup testdata/testdata.csv test-output.yml --sep ";"
@@ -56,7 +98,7 @@ that will later guide preprocessing of equivalent tabular files:
 And if so, within which collection should the data objects be found?
 - Should any columns be whitelisted or blacklisted?
 
-The final YAML will be printed on the console and saved as a file locally
+The final YAML will be printed on the console and saved as a file locally.
 
 ## `run`
 
@@ -70,32 +112,14 @@ python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml
 For testing purposes, it is possible to use
 the `--dry-run` flag, which simulates the preprocessing and identification of metadata and
 prints a small report at the end.
-An iRODS session will be initiated always.
+An iRODS session will be initiated always, so **make sure you have a valid active iRODS Session**.
 
 
 ```sh
 python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml --dry-run
 ```
 
-## Examples
-
-### A small csv file
-
-```sh
-python metadata_from_tabular.py setup testdata/testdata.csv test-config.yaml --sep ";"
-python metadata_from_tabular.py run testdata/testdata.csv --config test-config.yaml --dry-run
-```
-
-### A larger Excel file with multiple sheets
-
-```sh
-python metadata_from_tabular.py setup testdata/bigger-testdata.xlsx bigger-test-config.yaml
-python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigger--config.yaml --dry-run
-```
-
-## Actual test data
-
-```sh
-python metadata_from_tabular.py setup testdata/metadata.tsv testdata/voetlab-training.yaml --sep "\t"
-python metadata_from_tabular.py run testdata/metadata.tsv --config voetlab-training.yaml
-```
+It is not necessary to rerun both `setup` and `run` for each tabular file:
+if you have several tabular files with the same properties, and that thus can be described by the same
+YAML configuration file, you just need to run `setup` with one of them, and then
+`run` with each of the tabular files and the same configuration file.
