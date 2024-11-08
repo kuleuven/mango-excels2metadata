@@ -284,17 +284,9 @@ def mdtab():
     pass
 
 
-@mdtab.command()
-@click.option("--sep", default=",")
-@click.option("--irods/--no-irods", default=False)
-@click.argument("example")
-@click.argument("output", type=click.File("w"))
-def setup(example, output, sep=",", irods=False):
-    """Parse the contents of the example file and generate a config yaml file for preprocessing."""
-    import re
-    import yaml
-
-    # only connect to irods if requested
+# only connect to irods if requested
+def get_sheets(example, sep=",", irods=False):
+    """Parse a tabular file in iRODS or locally, with the right separator"""
     if irods:
         try:
             env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
@@ -306,9 +298,35 @@ def setup(example, output, sep=",", irods=False):
             sheets = parse_tabular_file(example, session, sep)
     else:
         sheets = parse_tabular_file(example, separator=sep)
+    return sheets
+
+
+@mdtab.command()
+@click.option("--sep", default=",")
+@click.option("--irods/--no-irods", default=False)
+@click.argument("example")
+@click.argument("output", type=click.File("w"))
+def setup(example, output, sep=",", irods=False):
+    """Parse the contents of the example file and generate a config yaml file for preprocessing."""
+    import re
+    import yaml
+
+    while True:
+        sheets = get_sheets(example, sep, irods)
+        if len(sheets) > 1:
+            break
+        column_names = list(sheets.values())[0].columns
+        if len(column_names) > 1:
+            break
+        update_separator = Confirm.ask(
+            f"Your sheet has only one column: `{column_names[0]}`, would you like to provide another separator?"
+        )
+        if update_separator:
+            sep = Prompt.ask("Which separator would you like to try now?") or " "
 
     # select which sheets to use, if there are more than one
     selection_of_sheets = select_sheets(sheets)
+
     sheets = {k: v for k, v in sheets.items() if k in selection_of_sheets}
 
     # identify the column with data objects identifiers
