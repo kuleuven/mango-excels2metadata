@@ -29,7 +29,7 @@ and attach metadata to them based on the columns of these files.
 The configuration file can be created as follows:
 
 ```sh
-python metadata_from_tabular.py filename output_path
+python metadata_from_tabular.py setup filename output_path
 ```
 
 In this case `filename` is the path to a tabular file (csv, tsv, Excel...),
@@ -37,14 +37,14 @@ stored either locally or in iRODS. If it lives in iRODS, the `--irods` flag shou
 so that an iRODS session is started:
 
 ```sh
-python metadata_from_tabular.py /zone/home/project/path/to/tabular output_path --irods
+python metadata_from_tabular.py setup /zone/home/project/path/to/tabular output_path --irods
 ```
 
 If the tabular file is a plain text file, it is possible to specify a column separator
 with the `--sep` option, which has "," as a default:
 
 ```sh
-python metadata_from_tabular.py testdata/testdata.csv test-output.yml --sep ";"
+python metadata_from_tabular.py setup testdata/testdata.csv test-output.yml --sep ";"
 ```
 
 If the file can be found and opened as a dataframe, the user will be prompted with questions
@@ -64,7 +64,7 @@ Given a path to a tabular file with metadata and a YAML with the settings to pre
 metadata can be added with the `run` command:
 
 ```sh
-python metadata_from_tabular.py path_to_tabular --config path/to/config.yml
+python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml
 ```
 
 For testing purposes, it is possible to use
@@ -74,7 +74,7 @@ An iRODS session will be initiated always.
 
 
 ```sh
-python metadata_from_tabular.py path_to_tabular --config path/to/config.yml --dry-run
+python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml --dry-run
 ```
 
 ## Examples
