@@ -323,6 +323,8 @@ def setup(example, output, sep=",", irods=False):
         )
         if update_separator:
             sep = Prompt.ask("Which separator would you like to try now?") or " "
+        else:
+            break
 
     # select which sheets to use, if there are more than one
     selection_of_sheets = select_sheets(sheets)
