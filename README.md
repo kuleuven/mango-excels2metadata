@@ -53,7 +53,7 @@ Then, with the `run` command we parse the Excel and simulate adding the metadata
 
 ```sh
 python metadata_from_tabular.py setup testdata/bigger-testdata.xlsx bigger-test-config.yaml
-python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigger--config.yaml --dry-run
+python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigger-test-config.yaml --dry-run
 ```
 
 ## Actual test data

@@ -15,6 +15,8 @@ from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.progress import track
 
+DATAOBJECT = "dataobject"
+
 
 # region OpenExcel
 def create_file_object(path: str, session=None):
@@ -121,22 +123,24 @@ def query_dataobjects_with_filename(
         )
         for path in paths:
             new_row = df.iloc[index]
-            new_row["dataobject"] = path
+            new_row[DATAOBJECT] = path
             # create a 1 row dataframe, which needs to be transposed (hence the T)
             new_rows.append(new_row.to_frame().T)
     if len(new_rows) > 0:
         new_df = pd.concat(new_rows, ignore_index=True)
     else:
         columns = [column for column in df.columns]
-        columns.append("dataobject")
+        columns.append(DATAOBJECT)
         new_df = pd.DataFrame(columns=columns)
     return new_df
 
 
-def chain_collection_and_filename(df, filename_column, workingdirectory):
+def chain_collection_and_filename(
+    df: pd.DataFrame, filename_column: str, workingdirectory: Path
+):
     """Renames the column with the relative data object path and completes it with the collection path"""
-    df = df.rename(columns={filename_column: "dataobject"})
-    df["dataobject"] = [str(workingdirectory / Path(x)) for x in df["dataobject"]]
+    df = df.rename(columns={filename_column: DATAOBJECT})
+    df[DATAOBJECT] = [str(workingdirectory / Path(x)) for x in df[DATAOBJECT]]
     return df
 
 
@@ -153,7 +157,7 @@ def dict_to_avus(row: dict) -> Generator[iRODSMeta]:
 def generate_rows(dataframe: pd.DataFrame) -> Generator[tuple]:
     """Yield a tuple of filename and metadata-dictionary from a dataframe"""
     for _, row in dataframe.iterrows():
-        yield (row["dataobject"], {k: v for k, v in row.items() if k != "dataobject"})
+        yield (row[DATAOBJECT], {k: v for k, v in row.items() if k != DATAOBJECT})
 
 
 def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSession):
@@ -179,6 +183,7 @@ def explain_multiple_choice():
 
 
 def select_sheets(sheet_collection: dict) -> list:
+    """Ask user to choose which sheets to use from an Excel"""
     selection_of_sheets = list(sheet_collection.keys())
     if len(sheet_collection) == 1:
         if selection_of_sheets[0] == "single_sheet":
@@ -210,6 +215,7 @@ def select_sheets(sheet_collection: dict) -> list:
 
 
 def identify_dataobject_column(sheet_collection: dict) -> str:
+    """Ask user which column contains the unique data object information"""
     columns = set([col for sheet in sheet_collection.values() for col in sheet.columns])
     dfs = "dataframe has" if len(sheet_collection) == 1 else "dataframes have"
     cols = "1 column" if len(columns) == 1 else f"{len(columns)} columns"
@@ -223,6 +229,7 @@ def identify_dataobject_column(sheet_collection: dict) -> str:
 
 
 def classify_dataobject_column(dataobject_column: str) -> dict:
+    """Ask user whether the unique identifier is a relative path or part of a filename"""
     import re
 
     path_type = Prompt.ask(
@@ -250,6 +257,7 @@ def classify_dataobject_column(dataobject_column: str) -> dict:
 
 
 def filter_columns(columns: list) -> dict:
+    """Ask user to blacklist or whitelist columns"""
     filter_how = Prompt.ask(
         "Would you like to whitelist or blacklist some columns?",
         choices=["whitelist", "blacklist", "neither"],
@@ -281,11 +289,12 @@ def filter_columns(columns: list) -> dict:
 # (and use click)
 @click.group()
 def mdtab():
+    """Process tabular files to add iRODS metadata to data objects."""
     pass
 
 
 # only connect to irods if requested
-def get_sheets(example, sep=",", irods=False):
+def get_sheets(example: str, sep=",", irods=False):
     """Parse a tabular file in iRODS or locally, with the right separator"""
     if irods:
         try:
@@ -302,12 +311,20 @@ def get_sheets(example, sep=",", irods=False):
 
 
 @mdtab.command()
-@click.option("--sep", default=",")
-@click.option("--irods/--no-irods", default=False)
+@click.option("--sep", default=",", help="Separator for plain text files.")
+@click.option(
+    "--irods/--no-irods", default=False, help="Whether an iRODS session is needed."
+)
 @click.argument("example")
 @click.argument("output", type=click.File("w"))
 def setup(example, output, sep=",", irods=False):
-    """Parse the contents of the example file and generate a config yaml file for preprocessing."""
+    """
+    Generate configuration file.
+
+    EXAMPLE is the path to the tabular file to parse.
+
+    OUTPUT is the path where the configuration file will be saved.
+    """
     import re
     import yaml
 
@@ -386,10 +403,18 @@ def setup(example, output, sep=",", irods=False):
 
 
 @mdtab.command()
-@click.option("--config", type=click.File("r"))
-@click.option("--dry-run", is_flag=True)
+@click.option(
+    "--config", type=click.File("r"), help="Configuration file created by `setup`."
+)
+@click.option("--dry-run", is_flag=True, help="Simulate applying the metadata.")
 @click.argument("filename")
 def run(filename, config, dry_run=False):
+    """Apply metadata from a tabular file to data objects.
+
+    FILENAME is the path to the tabular file containing the metadata.
+    It should have some column with a unique identifier for the data objects,
+    and columns for other metadata fields.
+    """
     process_file = apply_config(config)  # parse the configuration file
     try:
         env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
@@ -418,12 +443,14 @@ def run(filename, config, dry_run=False):
             )
 
 
-def apply_config(config: click.File):
+def apply_config(config: click.File) -> function:
+    """Parse the configuration file and apply the preprocessing"""
     import yaml
 
     yml = yaml.safe_load(config)
 
-    def process_tabular_file(filename, session):
+    def process_tabular_file(filename: str, session: iRODSSession):
+        """Apply the preprocessing to a file -this function is returned by apply_config()"""
         sheets = parse_tabular_file(filename, session, yml.get("separator", None))
         sheets_to_return = {}
         for sheetname, sheet in sheets.items():
@@ -445,11 +472,11 @@ def apply_config(config: click.File):
                     sheet, path_column_name, yml["path_column"]["workdir"]
                 )
             else:
-                sheet = sheet.rename(columns={path_column_name: "dataobject"})
+                sheet = sheet.rename(columns={path_column_name: DATAOBJECT})
 
             if "whitelist" in yml:
                 sheet = sheet[
-                    [c for c in sheet.columns if c in ["dataobject"] + yml["whitelist"]]
+                    [c for c in sheet.columns if c in [DATAOBJECT] + yml["whitelist"]]
                 ]
             elif "blacklist" in yml:
                 sheet = sheet[[c for c in sheet.columns if c not in yml["blacklist"]]]
