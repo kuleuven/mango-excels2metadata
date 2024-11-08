@@ -443,7 +443,7 @@ def run(filename, config, dry_run=False):
             )
 
 
-def apply_config(config: click.File) -> function:
+def apply_config(config: click.File) -> callable:
     """Parse the configuration file and apply the preprocessing"""
     import yaml
 
