@@ -141,11 +141,11 @@ def query_dataobjects_with_filename(
 
 
 def chain_collection_and_filename(
-    df: pd.DataFrame, filename_column: str, workingdirectory: Path
+    df: pd.DataFrame, filename_column: str, workingdirectory: str
 ):
     """Renames the column with the relative data object path and completes it with the collection path"""
     df = df.rename(columns={filename_column: DATAOBJECT})
-    df[DATAOBJECT] = [str(workingdirectory / Path(x)) for x in df[DATAOBJECT]]
+    df[DATAOBJECT] = [str(Path(workingdirectory) / Path(x)) for x in df[DATAOBJECT]]
     return df
 
 
@@ -242,7 +242,7 @@ def classify_dataobject_column(dataobject_column: str) -> dict:
         choices=["relative", "part"],
     )
     workdir = ""
-    while not re.match("/[a-z_]+/home/[^/]+/", workdir):
+    while not re.match("/[a-z_]+/home/[^/]+/?", workdir):
         workdir = Prompt.ask(
             "What is the absolute path of the collection where we can find these data objects? (It should start with `/{zone}/home/{project}/...`)"
         )

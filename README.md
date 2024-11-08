@@ -61,8 +61,8 @@ python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigge
 **TO BE DELETED BEFORE DEPLOYMENT**
 
 ```sh
-python metadata_from_tabular.py setup testdata/metadata.tsv testdata/voetlab-training.yaml --sep "\t"
-python metadata_from_tabular.py run testdata/metadata.tsv --config voetlab-training.yaml
+python metadata_from_tabular.py setup testdata/metadata.tsv testdata/voetlab-training.yml --sep "\t"
+python metadata_from_tabular.py run testdata/metadata.tsv --config testdata/voetlab-training.yml
 ```
 
 ## `setup`
