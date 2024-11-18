@@ -130,14 +130,14 @@ def query_dataobjects_with_filename(
             session, workingdirectory, identifier, exact_match
         )
         for path in paths:
-            new_row = df.iloc[index]
+            new_row = df.iloc[index].drop(filename_column)
             new_row[DATAOBJECT] = path
             # create a 1 row dataframe, which needs to be transposed (hence the T)
             new_rows.append(new_row.to_frame().T)
     if len(new_rows) > 0:
         new_df = pd.concat(new_rows, ignore_index=True)
     else:
-        columns = [column for column in df.columns]
+        columns = [column for column in df.columns if column != filename_column]
         columns.append(DATAOBJECT)
         new_df = pd.DataFrame(columns=columns)
     return new_df
