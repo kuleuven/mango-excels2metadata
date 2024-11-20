@@ -419,7 +419,10 @@ def setup(example, output, sep=",", irods=False):
 
 @mdtab.command()
 @click.option(
-    "--config", type=click.File("r"), help="Configuration file created by `setup`."
+    "--config",
+    type=click.File("r"),
+    required=True,
+    help="Configuration file created by `setup`.",
 )
 @click.option("--dry-run", is_flag=True, help="Simulate applying the metadata.")
 @click.argument("filename")
