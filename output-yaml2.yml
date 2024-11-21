@@ -1,0 +1,7 @@
+path_column:
+  column_name: dataobject
+  path_type: relative
+  workdir: /zone/home/mariana/
+sheets:
+- Tabelle1
+

@@ -1,18 +1,125 @@
 # Python module to extract metadata from tables
 
-Some ManGO users have expressed their wish to upload metadata of some data objects or collections as Excel (or at least tabular) files that could then be parsed and added as AVUs. This was already implemented for the Hackathon and it's being implemented for the Dayr-al Barsha project, but these implementations are also tailored to the specific needs/standards of those projects. Other users are also interested, mainly because they already add/have the metadata in tabular format and adding it manually would be extra work.
+Use this module to process tabular files in which each row represents an iRODS data object
+and each column contains either an identifier or metadata to add to this data object.
+It supports plain text files and Excel files, which could be stored locally or in iRODS itself.
 
-For that reason, we want to create a Python module that:
+As always, create a virtual environment and install the dependencies described in the [requirements file](./requirements.txt):
 
-- identifies a csv/Excel in a given collection
-- identifies the reference to the target data objects or collections in that tabular file
-    + By default, we would expect one column with the name
-    + We would allow custom functions to override this default, for example by combining different columns
-- for each data object or colleciton (=row in the tabular file) it extracts all relevant metadata pairs (name of a column + value) and adds the metadata with atomic operations
-    + By default, all columns would be parsed and their original names would be used
-    + It would be possible to map the names to modified names
-    + It would be possible to filter out the columns and validate the values, especially via a metadata schema
+```sh
+python -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
+```
 
-This would be a MVP level output: basic and configurable enough to address the needs of different projects. But it should be possible to integrate this with project-specific needs, such as the date parsing from filenames in the Dayr-al Barsha project.
+## Usage
 
-Of course, this module should include docstrings and unit testing :)
+This module can run on the command line with two commands: `setup` and `run`.
+
+The `setup` command takes as arguments the path to a tabular file (local or in iRODS) and
+the desired path for the output YAML, asks the user questions about how to
+parse the tabular file, and outputs a configuration file.
+
+This configuration file can then be provided as the `--config` option to the `run`
+command in order to standardize tabular files and properly obtain paths to data objects
+and attach metadata to them based on the columns of these files.
+
+### Examples
+
+### A small csv file
+
+The following file simulates having [a small semicolon-separated file](./testdata/testdata.csv)
+with absolute paths in a "dataobject" column and a few columns with metadata.
+
+First, with the `setup` command, we answer a few questions on how to parse the tabular file
+and create a "test-config.yaml" configuration file that keeps track of the answers.
+
+Then, with the `run` command, we use the information on the configuration YAML file to parse
+the tabular file and, because it's just a "dry run", we simulate adding the metadata to each
+data object. Note that this `run` command could then also be used on other tabular files
+with the same properties as the original one.
+
+```sh
+python metadata_from_tabular.py setup testdata/testdata.csv test-config.yaml --sep ";"
+python metadata_from_tabular.py run testdata/testdata.csv --config test-config.yaml --dry-run
+```
+
+### A larger Excel file with multiple sheets
+
+In this second example the file is an [Excel file with multiple sheets](./testdata/bigger-testdata.xlsx),
+including one that has no relevant metadata. Again, with the `setup` command we indicate
+how the Excel should be parsed and record the answers in a YAML configuration file.
+Then, with the `run` command we parse the Excel and simulate adding the metadata.
+
+```sh
+python metadata_from_tabular.py setup testdata/bigger-testdata.xlsx bigger-test-config.yaml
+python metadata_from_tabular.py run testdata/bigger-testdata.xlsx --config bigger-test-config.yaml --dry-run
+```
+
+## Actual test data
+
+**TO BE DELETED BEFORE DEPLOYMENT**
+
+```sh
+python metadata_from_tabular.py setup testdata/metadata.tsv testdata/voetlab-training.yml --sep "\t"
+python metadata_from_tabular.py run testdata/metadata.tsv --config testdata/voetlab-training.yml
+```
+
+## `setup`
+
+The configuration file can be created as follows:
+
+```sh
+python metadata_from_tabular.py setup filename output_path
+```
+
+In this case `filename` is the path to a tabular file (csv, tsv, Excel...),
+stored either locally or in iRODS. If it lives in iRODS, the `--irods` flag should be used,
+so that an iRODS session is started:
+
+```sh
+python metadata_from_tabular.py setup /zone/home/project/path/to/tabular output_path --irods
+```
+
+If the tabular file is a plain text file, it is possible to specify a column separator
+with the `--sep` option, which has "," as a default. If a wrong separator is provided and
+the parser finds a single column, it will warn you and give you the possibility to correct it.
+
+```sh
+python metadata_from_tabular.py setup testdata/testdata.csv test-output.yml --sep ";"
+```
+
+If the file can be found and opened as a dataframe, the user will be prompted with questions
+that will later guide preprocessing of equivalent tabular files:
+
+- If there are multiple sheets in an Excel file, which one(s) should be used?
+- Which of the columns contains a unique identifier of the data objects that metadata has to be attached to?
+- If the unique identifier is not an absolute path, is it a relative path or part of filename?
+And if so, within which collection should the data objects be found?
+- Should any columns be whitelisted or blacklisted?
+
+The final YAML will be printed on the console and saved as a file locally.
+
+## `run`
+
+Given a path to a tabular file with metadata and a YAML with the settings to preprocess it,
+metadata can be added with the `run` command:
+
+```sh
+python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml
+```
+
+For testing purposes, it is possible to use
+the `--dry-run` flag, which simulates the preprocessing and identification of metadata and
+prints a small report at the end.
+An iRODS session will be initiated always, so **make sure you have a valid active iRODS Session**.
+
+
+```sh
+python metadata_from_tabular.py run path_to_tabular --config path/to/config.yml --dry-run
+```
+
+It is not necessary to rerun both `setup` and `run` for each tabular file:
+if you have several tabular files with the same properties, and that thus can be described by the same
+YAML configuration file, you just need to run `setup` with one of them, and then
+`run` with each of the tabular files and the same configuration file.

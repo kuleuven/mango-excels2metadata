@@ -8,6 +8,14 @@ from irods.data_object import iRODSDataObject
 from irods.column import Criterion
 from irods.models import Collection, DataObject
 from collections.abc import Generator
+import click
+from rich.prompt import Prompt, Confirm
+from rich.console import Console, Group
+from rich.markdown import Markdown
+from rich.syntax import Syntax
+from rich.progress import track
+
+DATAOBJECT = "dataobject"
 
 
 # region OpenExcel
@@ -31,7 +39,10 @@ def create_file_object(path: str, session=None):
     if ppath.exists():
         return ppath
     if session:
-        return session.data_objects.get(path)
+        try:
+            return session.data_objects.get(path)
+        except DataObjectDoesNotExist or CollectionDoesNotExist as e:
+            raise e
     raise FileNotFoundError
 
 
@@ -58,11 +69,16 @@ def parse_tabular_file(path: str, session=None, separator: str = ","):
         # and there you should use just 'r' instead
         reading_mode = "r" if type(file) == iRODSDataObject else "rb"
         with file.open(reading_mode) as f:
-            return pd.read_excel(f, sheet_name=None)
+            sheets = pd.read_excel(f, sheet_name=None)
+        if any(x.strip() != x for x in sheets.keys()):
+            sheets = {k.strip(): v for k, v in sheets.items()}
     else:
         # these types are not binary and should be opened with 'r'
         with file.open("r") as f:
-            return {"single_sheet": pd.read_csv(f, sep=separator)}
+            sheets = {"single_sheet": pd.read_csv(f, sep=separator)}
+    for sheet in sheets.values():
+        sheet.columns = sheet.columns.str.strip()
+    return sheets
 
 
 # endregion
@@ -114,39 +130,26 @@ def query_dataobjects_with_filename(
             session, workingdirectory, identifier, exact_match
         )
         for path in paths:
-            new_row = df.iloc[index]
-            new_row["dataobject"] = path
+            new_row = df.iloc[index].drop(filename_column)
+            new_row[DATAOBJECT] = path
             # create a 1 row dataframe, which needs to be transposed (hence the T)
             new_rows.append(new_row.to_frame().T)
     if len(new_rows) > 0:
         new_df = pd.concat(new_rows, ignore_index=True)
     else:
-        columns = [column for column in df.columns]
-        columns.append("dataobject")
+        columns = [column for column in df.columns if column != filename_column]
+        columns.append(DATAOBJECT)
         new_df = pd.DataFrame(columns=columns)
     return new_df
 
 
-# Will this survive as it is??
-def extract_filename(tabulardata, path_prefix=""):
-    """Extract filename from the tabular data.
-    This is the default method to extract the full path of the data object
-    to which metadata will be added from tabular data.
-
-    Args:
-        tabulardata (pandas.Series): Row of the dataframe with metadata to add.
-        path_prefix (str, optional): Initial part of the absolute path of the data object, which should be added in
-        case of a relative path in the tabulardata. Defaults to "".
-
-    Yields:
-        str: Absolute path(s) to the data objects
-    """
-    final_path = Path(path_prefix) / Path(tabulardata["dataobject"])
-    if final_path.is_absolute() and final_path.parts[2] != "home":
-        raise IOError(
-            "Invalid filename: if the path is absolute, the second collection should be 'home'."
-        )
-    yield str(final_path)
+def chain_collection_and_filename(
+    df: pd.DataFrame, filename_column: str, workingdirectory: str
+):
+    """Renames the column with the relative data object path and completes it with the collection path"""
+    df = df.rename(columns={filename_column: DATAOBJECT})
+    df[DATAOBJECT] = [str(Path(workingdirectory) / Path(x)) for x in df[DATAOBJECT]]
+    return df
 
 
 # endregion
@@ -162,15 +165,134 @@ def dict_to_avus(row: dict) -> Generator[iRODSMeta]:
 def generate_rows(dataframe: pd.DataFrame) -> Generator[tuple]:
     """Yield a tuple of filename and metadata-dictionary from a dataframe"""
     for _, row in dataframe.iterrows():
-        yield (row["filename"], {k: v for k, v in row.items() if k != "filename"})
+        yield (row[DATAOBJECT], {k: v for k, v in row.items() if k != DATAOBJECT})
 
 
 def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSession):
     """Add metadata from a dictionary to a given data object"""
-    obj = session.data_objects.get(path)
-    obj.metadata.apply_atomic_operations(
-        *[AVUOperation(operation="add", avu=item) for item in dict_to_avus(avu_dict)]
+    try:
+        obj = session.data_objects.get(path)
+        obj.metadata.apply_atomic_operations(
+            *[
+                AVUOperation(operation="add", avu=item)
+                for item in dict_to_avus(avu_dict)
+            ]
+        )
+        return True
+    except Exception:
+        return False
+
+
+# endregion
+
+# region prompts
+
+console = Console()
+
+
+def explain_multiple_choice():
+    console.print(
+        "Type one answer at a time, pressing Enter afterwards. Press Enter twice when you are done.",
+        style="italic magenta",
     )
+
+
+def select_sheets(sheet_collection: dict) -> list:
+    """Ask user to choose which sheets to use from an Excel"""
+    selection_of_sheets = list(sheet_collection.keys())
+    if len(sheet_collection) == 1:
+        if selection_of_sheets[0] == "single_sheet":
+            console.print(
+                "You have provided a plain text file, no multiple sheets, great work!"
+            )
+        else:
+            console.print(
+                Markdown(
+                    f"The file you provided has only one sheet: `{selection_of_sheets[0]}`."
+                )
+            )
+        return selection_of_sheets[0]
+    all_sheets = Confirm.ask("Would you like to use all of the available sheets?")
+    if all_sheets:
+        return selection_of_sheets
+    explain_multiple_choice()
+    selected_sheets = []
+    while True:
+        selected_sheet = Prompt.ask(
+            "Which of the available sheets would you like to select?",
+            choices=selection_of_sheets + [""],
+        )
+        if selected_sheet:
+            selected_sheets.append(selected_sheet)
+        else:
+            break
+    return selected_sheets
+
+
+def identify_dataobject_column(sheet_collection: dict) -> str:
+    """Ask user which column contains the unique data object information"""
+    columns = set([col for sheet in sheet_collection.values() for col in sheet.columns])
+    dfs = "dataframe has" if len(sheet_collection) == 1 else "dataframes have"
+    cols = "1 column" if len(columns) == 1 else f"{len(columns)} columns"
+    column_intro = f"Your {dfs} {cols}:\n\n"
+    column_list = "\n\n".join(f"- {col}" for col in columns)
+    console.print(Markdown(column_intro + column_list))
+    return Prompt.ask(
+        "Which column contains an unique identifier for the target data object?",
+        choices=columns,
+    )
+
+
+def classify_dataobject_column(dataobject_column: str) -> dict:
+    """Ask user whether the unique identifier is a relative path or part of a filename"""
+    import re
+
+    path_type = Prompt.ask(
+        f"Is the path coded in `{dataobject_column}` a relative path or part of a filename?",
+        choices=["relative", "part"],
+    )
+    workdir = ""
+    while not re.match("/[a-z_]+/home/[^/]+/?", workdir):
+        workdir = Prompt.ask(
+            "What is the absolute path of the collection where we can find these data objects? (It should start with `/{zone}/home/{project}/...`)"
+        )
+    if path_type == "relative":
+        console.print(
+            Markdown(
+                f"Great! The relative paths in `{dataobject_column}` will be chained to `{workdir}`!"
+            )
+        )
+    else:
+        console.print(
+            Markdown(
+                f"Great! Data objects will be found by querying the contents of `{dataobject_column}` within `{workdir}`!"
+            )
+        )
+    return {"path_type": path_type, "workdir": workdir}
+
+
+def filter_columns(columns: list) -> dict:
+    """Ask user to blacklist or whitelist columns"""
+    filter_how = Prompt.ask(
+        "Would you like to whitelist or blacklist some columns?",
+        choices=["whitelist", "blacklist", "neither"],
+        default="neither",
+    )
+    if filter_how == "neither":
+        return {}
+    explain_multiple_choice()
+    filter_what = []
+    while True:
+        ans = Prompt.ask(
+            f"Which column(s) would you like to {filter_how}?", choices=columns + [""]
+        )
+        if ans:
+            filter_what.append(ans)
+        else:
+            break
+    if len(filter_what) == 0:
+        return {}
+    return {filter_how: filter_what}
 
 
 # endregion
@@ -180,13 +302,138 @@ def apply_metadata_to_data_object(path: str, avu_dict: dict, session: iRODSSessi
 
 # These are the functions that would be called from the command line :)
 # (and use click)
-def do_something():
-    return
+@click.group()
+def mdtab():
+    """Process tabular files to add iRODS metadata to data objects."""
+    pass
 
 
-# endregion
+# only connect to irods if requested
+def get_sheets(example: str, sep=",", irods=False):
+    """Parse a tabular file in iRODS or locally, with the right separator"""
+    if irods:
+        try:
+            env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
+        except KeyError:
+            env_file = os.path.expanduser("~/.irods/irods_environment.json")
 
-if __name__ == "__main__":
+        ssl_settings = {}
+        with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
+            sheets = parse_tabular_file(example, session, sep)
+    else:
+        sheets = parse_tabular_file(example, separator=sep)
+    return sheets
+
+
+@mdtab.command()
+@click.option("--sep", default=",", help="Separator for plain text files.")
+@click.option(
+    "--irods/--no-irods", default=False, help="Whether an iRODS session is needed."
+)
+@click.argument("example")
+@click.argument("output", type=click.File("w"))
+def setup(example, output, sep=",", irods=False):
+    """
+    Generate configuration file.
+
+    EXAMPLE is the path to the tabular file to parse.
+
+    OUTPUT is the path where the configuration file will be saved.
+    """
+    import re
+    import yaml
+
+    while True:
+        sheets = get_sheets(example, sep, irods)
+        if len(sheets) > 1:
+            break
+        column_names = list(sheets.values())[0].columns
+        if len(column_names) > 1:
+            break
+        update_separator = Confirm.ask(
+            f"Your sheet has only one column: `{column_names[0]}`, would you like to provide another separator?"
+        )
+        if update_separator:
+            sep = Prompt.ask("Which separator would you like to try now?") or " "
+        else:
+            break
+
+    # select which sheets to use, if there are more than one
+    selection_of_sheets = select_sheets(sheets)
+
+    sheets = {k: v for k, v in sheets.items() if k in selection_of_sheets}
+
+    # identify the column with data objects identifiers
+    dataobject_column = identify_dataobject_column(sheets)
+    # only keep sheets that contain that column
+    sheets = {k: v for k, v in sheets.items() if dataobject_column in v.columns}
+
+    # start config yaml with the info we have
+    for_yaml = {
+        "sheets": list(sheets.keys()),
+        "separator": sep,
+        "path_column": {
+            "column_name": dataobject_column,
+        },
+    }
+
+    # check the first data object name to see if it is absolute
+    first_dataobject = list(sheets.values())[0][dataobject_column][0]
+    if re.match("/[a-z_]+/home/[^/]+/", first_dataobject):
+        dataobject_column_type = {"path_type": "absolute"}
+    else:
+        # if the path is not absolute, ask:
+        # - whether it is relative or part of a filename
+        # - in which working directory (at least project level) it should be searched
+        dataobject_column_type = classify_dataobject_column(dataobject_column)
+    # add path and working directory info to the yaml
+    for_yaml["path_column"].update(dataobject_column_type)
+
+    # ask if any columns need to be blacklisted OR whitelisted
+    column_filter = filter_columns(
+        list(
+            set(
+                [
+                    col
+                    for sheet in sheets.values()
+                    for col in sheet.columns
+                    if col != dataobject_column
+                ]
+            )
+        )
+    )
+    # update yaml with column information
+    for_yaml.update(column_filter)
+
+    # create yaml from the dictionary
+    yml = yaml.dump(for_yaml, default_flow_style=False, indent=2)
+    # Make a group and indicate where it is saved
+    panel_group = Group(
+        Markdown("# This is your config yaml"),
+        Syntax(yml, "yaml"),
+        Markdown(f"_It will be saved in `{output.name}`._"),
+    )
+    console.print(panel_group)
+    click.echo(yml, file=output)
+
+
+@mdtab.command()
+@click.option(
+    "--config",
+    type=click.File("r"),
+    required=True,
+    help="Configuration file created by `setup`.",
+)
+@click.option("--dry-run", is_flag=True, help="Simulate applying the metadata.")
+@click.argument("filename")
+def run(filename, config, dry_run=False):
+    """Apply metadata from a tabular file to data objects.
+
+    FILENAME is the path to the tabular file containing the metadata.
+    It should have some column with a unique identifier for the data objects,
+    and columns for other metadata fields.
+    """
+    process_file = apply_config(config)  # parse the configuration file
     try:
         env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
     except KeyError:
@@ -194,4 +441,82 @@ if __name__ == "__main__":
 
     ssl_settings = {}
     with iRODSSession(irods_env_file=env_file, **ssl_settings) as session:
-        do_something()
+        sheets = process_file(filename, session)  # preprocess the tabular file
+        for sheetname, sheet in sheets.items():
+            progress_message = f"Adding metadata from {sheetname + ' in ' if len(sheets) > 1 else ''}`{filename}`..."
+            n = 0
+            errors = 0
+            # loop over each row printing a progress bar
+            for dataobject, md_dict in track(
+                generate_rows(sheet),
+                description=progress_message,
+            ):
+                res = True
+                if not dry_run:
+                    res = apply_metadata_to_data_object(dataobject, md_dict, session)
+                if res:
+                    n += 1
+                else:
+                    errors += 1
+
+            console.print(
+                Markdown(
+                    f"{'Created' if dry_run else 'Applied'} {len(md_dict)} AVUs for each of {n} data objects, with the following keys:\n\n"
+                    + "\n\n".join(f"- **{k}**" for k in md_dict.keys())
+                )
+            )
+            if errors > 0:
+                console.print(
+                    f"{errors} data objects were skipped because the paths were not valid!",
+                    style="red bold",
+                )
+
+
+def apply_config(config: click.File) -> callable:
+    """Parse the configuration file and apply the preprocessing"""
+    import yaml
+
+    yml = yaml.safe_load(config)
+
+    def process_tabular_file(filename: str, session: iRODSSession):
+        """Apply the preprocessing to a file -this function is returned by apply_config()"""
+        sheets = parse_tabular_file(filename, session, yml.get("separator", None))
+        sheets_to_return = {}
+        for sheetname, sheet in sheets.items():
+            if not sheetname in yml["sheets"]:
+                continue
+            path_column_name = yml["path_column"]["column_name"]
+            if yml["path_column"]["path_type"] == "part":
+                sheet = query_dataobjects_with_filename(
+                    session,
+                    sheet,
+                    path_column_name,
+                    yml["path_column"]["workdir"],
+                    exact_match=False,
+                )
+                if sheet.empty:
+                    continue
+            elif yml["path_column"]["path_type"] == "relative":
+                sheet = chain_collection_and_filename(
+                    sheet, path_column_name, yml["path_column"]["workdir"]
+                )
+            else:
+                sheet = sheet.rename(columns={path_column_name: DATAOBJECT})
+
+            if "whitelist" in yml:
+                sheet = sheet[
+                    [c for c in sheet.columns if c in [DATAOBJECT] + yml["whitelist"]]
+                ]
+            elif "blacklist" in yml:
+                sheet = sheet[[c for c in sheet.columns if c not in yml["blacklist"]]]
+            sheets_to_return[sheetname] = sheet
+
+        return sheets_to_return
+
+    return process_tabular_file
+
+
+# endregion
+
+if __name__ == "__main__":
+    mdtab()
