@@ -1,8 +1,0 @@
-path_column:
-  column_name: filename
-  path_type: part
-  workdir: /ghum/home/mango_training/voetlab_metadata_training
-separator: \t
-sheets:
-- single_sheet
-
